@@ -566,15 +566,13 @@ nestToDoc set (Nest (LineExtend fp) inside:rest) = do
       notEmpty _ = True
       ns = nestLines $ filter notEmpty ls
   blocks <- getInnerBlocks inside
-  let ns' = replaceBlocks blocks ns
+  ns' <- replaceBlocks blocks `mapM` ns
   r1 <- nestToDoc set' ns'
   r2 <- nestToDoc set rest
   pure $ r1 <> r2
 nestToDoc set (Nest (LineBlock _) inside:rest) =
   nestToDoc set (inside ++ rest)
-nestToDoc set (Nest LineSuper []:rest) =
-  nestToDoc set rest
-nestToDoc _set (Nest LineSuper _:_) = Error "'super' should not have children"
+nestToDoc set (Nest LineSuper super:rest) = nestToDoc set $ super ++ rest
 nestToDoc _set (Nest (LineElseIf _) _:_) = Error "Unexpected elseif"
 nestToDoc _set (Nest LineElse _:_) = Error "Unexpected else"
 nestToDoc _set (Nest LineNothing _:_) = Error "Unexpected nothing"
@@ -589,26 +587,18 @@ getInnerBlocks (Nest (LineBlock name) inside:rest) = do
   if Map.member name r
      then Error $ "Duplicate block: " ++ show name
      else pure $ Map.insert name inside r
-getInnerBlocks (other:rest) = Error "Unexpected tag inside $extend"
+getInnerBlocks _ = Error "Unexpected tag inside $extend"
 
-replaceBlocks :: Blocks -> [Nest] -> [Nest]
-replaceBlocks _ [] = []
-replaceBlocks blocks (Nest line inside:rest) =
-  let rest' = replaceBlocks blocks rest
-      f name = maybe inside (replaceSuper inside) (Map.lookup name blocks)
-      inside' =
-        case line of
-          LineBlock name -> f name
-          o              -> replaceBlocks blocks inside
-   in Nest line inside' : rest'
-
-replaceSuper :: [Nest] -> [Nest] -> [Nest]
-replaceSuper super [] = []
-replaceSuper super (Nest line inside:rest) =
-  let rest' = replaceSuper super rest
-   in case line of
-        LineSuper -> super ++ (Nest LineSuper inside : rest')
-        _         -> Nest line (replaceSuper super inside) : rest'
+replaceBlocks :: Blocks -> Nest -> Result Nest
+replaceBlocks blocks (Nest line super) =
+  Nest line <$>
+    case line of
+      LineBlock name -> maybe (pure super) (mapM setSuper) $ Map.lookup name blocks
+      _              -> replaceBlocks blocks `mapM` super
+  where
+    setSuper (Nest LineSuper []) = pure $ Nest LineSuper super
+    setSuper (Nest LineSuper _)  = Error "'super' should not have children"
+    setSuper (Nest line inside)  = Nest line <$> mapM setSuper inside
 
 compressDoc :: [Doc] -> [Doc]
 compressDoc [] = []
