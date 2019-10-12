@@ -558,6 +558,7 @@ nestToDoc set (Nest (LineContent content avoidNewLine) inside:rest) = do
                 ([], Nest LineTag{} _:_) -> True
                 _ -> False
     Ok $ map DocContent content ++ newline':inside' ++ rest'
+nestToDoc _set (Nest (LineExtend _) []:rest) = Error "$extend is empty"
 nestToDoc set (Nest (LineExtend fp) inside:rest) = do
   let s = unsafePerformIO $ readFile fp
   (mnl, set', ls) <- parseLines set s
@@ -585,10 +586,10 @@ getInnerBlocks :: [Nest] -> Result Blocks
 getInnerBlocks [] = pure Map.empty
 getInnerBlocks (Nest (LineBlock name) inside:rest) = do
   r <- getInnerBlocks rest
-  case Map.lookup name r of
-    Just _ -> Error $ "Duplicate block: " ++ show name
-    Nothing -> pure $ Map.insert name inside r
-getInnerBlocks (other:rest) = Error $ "Unexpected tag inside $extend"
+  if Map.member name r
+     then Error $ "Duplicate block: " ++ show name
+     else pure $ Map.insert name inside r
+getInnerBlocks (other:rest) = Error "Unexpected tag inside $extend"
 
 replaceBlocks :: Blocks -> [Nest] -> [Nest]
 replaceBlocks _ [] = []
