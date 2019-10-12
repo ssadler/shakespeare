@@ -1,0 +1,10 @@
+$extend test/hamlets/base.hamlet
+  $block title
+    $super
+    \ - User
+  $block body
+    content
+/
+$extend test/hamlets/base.hamlet
+  $block body
+    content2

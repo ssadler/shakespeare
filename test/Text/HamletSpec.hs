@@ -32,6 +32,7 @@ spec = do
     it "url chain " caseUrlChain
     it "embed" caseEmbed
     it "embed chain " caseEmbedChain
+    it "extend" caseExtend
     it "if" caseIf
     it "if chain " caseIfChain
     it "else" caseElse
@@ -637,6 +638,11 @@ caseEmbed = do
     helper "embed" [hamlet|^{embed theArg}|]
     helper "embed" $(hamletFileReload "test/hamlets/embed.hamlet")
     ihelper "embed" $(ihamletFileReload "test/hamlets/embed.hamlet")
+
+caseExtend :: Assertion
+caseExtend = do
+    helper "MySite - User\n-content/MySite\n-content2"
+           $(hamletFileReload "test/hamlets/base-extend.hamlet")
 
 caseEmbedChain :: Assertion
 caseEmbedChain = do

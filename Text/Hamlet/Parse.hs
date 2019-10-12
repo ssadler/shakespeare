@@ -28,9 +28,11 @@ import Data.Char (GeneralCategory(..), generalCategory, isUpper)
 import Data.Data
 import Text.ParserCombinators.Parsec hiding (Line)
 import Data.Set (Set)
+import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Maybe (mapMaybe, fromMaybe, isNothing)
 import Language.Haskell.TH.Syntax (Lift (..))
+import System.IO.Unsafe
 
 data Result v = Error String | Ok v
     deriving (Show, Eq, Read, Data, Typeable)
@@ -65,6 +67,9 @@ data Line = LineForall Deref Binding
           | LineNothing
           | LineCase Deref
           | LineOf Binding
+          | LineBlock Ident
+          | LineExtend String
+          | LineSuper
           | LineTag
             { _lineTagName :: String
             , _lineAttr :: [(Maybe Deref, String, Maybe [Content])]
@@ -123,6 +128,9 @@ parseLine set = do
          controlForall <|>
          controlWith <|>
          controlCase <|>
+         controlBlock <|>
+         controlExtend <|>
+         controlSuper <|>
          controlOf <|>
          angle <|>
          invalidDollar <|>
@@ -230,6 +238,22 @@ parseLine set = do
         _ <- spaceTabs
         eol
         return $ LineCase x
+    controlBlock = do
+        _ <- try $ string "$block"
+        spaces
+        name <- ident
+        eol
+        return $ LineBlock name
+    controlExtend = do
+        _ <- try $ string "$extend"
+        spaces
+        path <- many1 $ noneOf " \n\t"
+        eol
+        return $ LineExtend path
+    controlSuper = do
+        _ <- try $ string "$super"
+        eol
+        return LineSuper
     controlOf = do
         _   <- try $ string "$of"
         spaces
@@ -534,10 +558,56 @@ nestToDoc set (Nest (LineContent content avoidNewLine) inside:rest) = do
                 ([], Nest LineTag{} _:_) -> True
                 _ -> False
     Ok $ map DocContent content ++ newline':inside' ++ rest'
+nestToDoc set (Nest (LineExtend fp) inside:rest) = do
+  let s = unsafePerformIO $ readFile fp
+  (mnl, set', ls) <- parseLines set s
+  let notEmpty (_, LineContent [] _) = False
+      notEmpty _ = True
+      ns = nestLines $ filter notEmpty ls
+  blocks <- getInnerBlocks inside
+  let ns' = replaceBlocks blocks ns
+  r1 <- nestToDoc set' ns'
+  r2 <- nestToDoc set rest
+  pure $ r1 <> r2
+nestToDoc set (Nest (LineBlock _) inside:rest) =
+  nestToDoc set (inside ++ rest)
+nestToDoc set (Nest LineSuper []:rest) =
+  nestToDoc set rest
+nestToDoc _set (Nest LineSuper _:_) = Error "'super' should not have children"
 nestToDoc _set (Nest (LineElseIf _) _:_) = Error "Unexpected elseif"
 nestToDoc _set (Nest LineElse _:_) = Error "Unexpected else"
 nestToDoc _set (Nest LineNothing _:_) = Error "Unexpected nothing"
 nestToDoc _set (Nest (LineOf _) _:_) = Error "Unexpected 'of' (did you forget a $case?)"
+
+type Blocks = Map.Map Ident [Nest]
+
+getInnerBlocks :: [Nest] -> Result Blocks
+getInnerBlocks [] = pure Map.empty
+getInnerBlocks (Nest (LineBlock name) inside:rest) = do
+  r <- getInnerBlocks rest
+  case Map.lookup name r of
+    Just _ -> Error $ "Duplicate block: " ++ show name
+    Nothing -> pure $ Map.insert name inside r
+getInnerBlocks (other:rest) = Error $ "Unexpected tag inside $extend"
+
+replaceBlocks :: Blocks -> [Nest] -> [Nest]
+replaceBlocks _ [] = []
+replaceBlocks blocks (Nest line inside:rest) =
+  let rest' = replaceBlocks blocks rest
+      f name = maybe inside (replaceSuper inside) (Map.lookup name blocks)
+      inside' =
+        case line of
+          LineBlock name -> f name
+          o              -> replaceBlocks blocks inside
+   in Nest line inside' : rest'
+
+replaceSuper :: [Nest] -> [Nest] -> [Nest]
+replaceSuper super [] = []
+replaceSuper super (Nest line inside:rest) =
+  let rest' = replaceSuper super rest
+   in case line of
+        LineSuper -> super ++ (Nest LineSuper inside : rest')
+        _         -> Nest line (replaceSuper super inside) : rest'
 
 compressDoc :: [Doc] -> [Doc]
 compressDoc [] = []
