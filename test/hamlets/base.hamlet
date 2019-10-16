@@ -1,4 +1,5 @@
-$block title
-  MySite
--
-$block body
+<title>
+  $block title
+    MySite
+<div>
+  $block content

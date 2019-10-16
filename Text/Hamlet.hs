@@ -651,3 +651,8 @@ runtimeContentToHtml cd render i18nRender handleMsg = go
         Just (EMixin m) -> m render
         Just (EMixinI18n m) -> m i18nRender render
         _ -> error $ show d ++ ": expected EMixin"
+
+
+
+compileDoc :: String -> Q Exp
+compileDoc = hamletFromString htmlRules defaultHamletSettings

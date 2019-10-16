@@ -67,8 +67,9 @@ data Line = LineForall Deref Binding
           | LineNothing
           | LineCase Deref
           | LineOf Binding
+          | LineDef Ident
+          | LineCall Ident
           | LineBlock Ident
-          | LineExtend String
           | LineSuper
           | LineTag
             { _lineTagName :: String
@@ -129,7 +130,8 @@ parseLine set = do
          controlWith <|>
          controlCase <|>
          controlBlock <|>
-         controlExtend <|>
+         controlDef <|>
+         controlCall <|>
          controlSuper <|>
          controlOf <|>
          angle <|>
@@ -244,12 +246,18 @@ parseLine set = do
         name <- ident
         eol
         return $ LineBlock name
-    controlExtend = do
-        _ <- try $ string "$extend"
+    controlCall = do
+        _ <- try $ string "$call"
         spaces
-        path <- many1 $ noneOf " \n\t"
+        name <- ident
         eol
-        return $ LineExtend path
+        return $ LineCall name
+    controlDef = do
+        _ <- try $ string "$def"
+        spaces
+        name <- ident
+        eol
+        return $ LineDef name
     controlSuper = do
         _ <- try $ string "$super"
         eol
@@ -558,27 +566,35 @@ nestToDoc set (Nest (LineContent content avoidNewLine) inside:rest) = do
                 ([], Nest LineTag{} _:_) -> True
                 _ -> False
     Ok $ map DocContent content ++ newline':inside' ++ rest'
-nestToDoc _set (Nest (LineExtend _) []:rest) = Error "$extend is empty"
-nestToDoc set (Nest (LineExtend fp) inside:rest) = do
-  let s = unsafePerformIO $ readFile fp
-  (mnl, set', ls) <- parseLines set s
-  let notEmpty (_, LineContent [] _) = False
-      notEmpty _ = True
-      ns = nestLines $ filter notEmpty ls
-  blocks <- getInnerBlocks inside
-  ns' <- replaceBlocks blocks `mapM` ns
-  r1 <- nestToDoc set' ns'
-  r2 <- nestToDoc set rest
-  pure $ r1 <> r2
-nestToDoc set (Nest (LineBlock _) inside:rest) =
-  nestToDoc set (inside ++ rest)
-nestToDoc set (Nest LineSuper super:rest) = nestToDoc set $ super ++ rest
+nestToDoc set (Nest (LineBlock _) inner:rest) = nestToDoc set $ inner ++ rest
+nestToDoc set (Nest LineSuper inner:rest) = nestToDoc set $ inner ++ rest
 nestToDoc _set (Nest (LineElseIf _) _:_) = Error "Unexpected elseif"
 nestToDoc _set (Nest LineElse _:_) = Error "Unexpected else"
 nestToDoc _set (Nest LineNothing _:_) = Error "Unexpected nothing"
 nestToDoc _set (Nest (LineOf _) _:_) = Error "Unexpected 'of' (did you forget a $case?)"
+nestToDoc _set (Nest (LineDef _) _:_) = Error "Unexpected 'def'"
+nestToDoc _set (Nest (LineCall name) _:_) = Error $ "Unexpected $call " ++ show name
 
 type Blocks = Map.Map Ident [Nest]
+type Defs = Map.Map Ident [Nest]
+
+runCalls :: [Nest] -> Result [Nest]
+runCalls = f (mempty :: Defs)
+  where
+    f _ [] = pure []
+    f defs (Nest (LineDef name) inner:rest) = do
+      inner' <- f defs inner
+      f (Map.insert name inner' defs) rest
+    f defs (Nest (LineCall name) inner:rest) = do
+      let err = Error $ "definition not found: " ++ show name
+      def <- maybe err pure $ Map.lookup name defs
+      blocks <- f defs inner >>= getInnerBlocks
+      replaced <- replaceBlocks blocks `mapM` def
+      (replaced ++) <$> f defs rest
+    f defs (Nest line inner:rest) = do
+      head <- f defs inner
+      rest' <- f defs rest
+      pure $ Nest line head : rest'
 
 getInnerBlocks :: [Nest] -> Result Blocks
 getInnerBlocks [] = pure Map.empty
@@ -587,7 +603,7 @@ getInnerBlocks (Nest (LineBlock name) inside:rest) = do
   if Map.member name r
      then Error $ "Duplicate block: " ++ show name
      else pure $ Map.insert name inside r
-getInnerBlocks _ = Error "Unexpected tag inside $extend"
+getInnerBlocks _ = Error "Unexpected tag inside $call"
 
 replaceBlocks :: Blocks -> Nest -> Result Nest
 replaceBlocks blocks (Nest line super) =
@@ -629,7 +645,7 @@ parseDoc set s = do
     let notEmpty (_, LineContent [] _) = False
         notEmpty _ = True
     let ns = nestLines $ filter notEmpty ls
-    ds <- nestToDoc set' ns
+    ds <- runCalls ns >>= nestToDoc set'
     return (mnl, compressDoc ds)
 
 attrToContent :: (Maybe Deref, String, [(Maybe Deref, Maybe [Content])]) -> [Doc]
